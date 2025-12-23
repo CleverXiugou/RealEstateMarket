@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>去中心化不动产租金收益协议 - RWA Testnet</title>
+    <script src="https://cdn.staticfile.org/react/18.2.0/umd/react.development.js"></script>
+    <script src="https://cdn.staticfile.org/react-dom/18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdn.staticfile.org/babel-standalone/6.26.0/babel.min.js"></script>
+    <script src="https://cdn.staticfile.org/ethers/5.7.2/ethers.umd.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #f3f4f6; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.2); }
+        /* 隐藏滚动条但保留功能 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // ================= 配置区域 =================
+        // ⚠️ 请在这里填入你部署后的合约地址
+        const CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3"; 
+        
+        const CONTRACT_ABI = [
+            "function listProperty(string _name, string _physicalAddress, uint256 _area, string _propertyType, string _phone) external returns (uint256)",
+            "function startInvestment(uint256 _propertyId, uint256 _sharePrice, uint256 _durationMonths) external payable",
+            "function finishInvestment(uint256 _propertyId) external",
+            "function buyShares(uint256 _propertyId, uint256 _shareAmount) external payable",
+            "function listForRent(uint256 _propertyId, uint256 _monthlyRent) external",
+            "function rentProperty(uint256 _propertyId, uint256 _months) external payable",
+            "function claimRentIncome(uint256 _propertyId) external",
+            "function withdrawDeposits(uint256 _propertyId) external",
+            "function properties(uint256) view returns (string name, string physicalAddress, uint256 area, string propertyType, string landlordPhone, address landlord, uint8 status, uint256 sharePrice, uint256 investmentEndTime, uint256 landlordDeposit, uint256 totalSharesSold, uint256 monthlyRent, uint256 rentDeposit, uint256 rentStartTime, uint256 rentEndTime, address tenant)",
+            "function userInfo(uint256, address) view returns (uint256 shares, uint256 withdrawnRent)",
+            "event PropertyListed(uint256 indexed id, string name, address landlord)"
+        ];
+
+        const STATUS_MAP = ["闲置 (Idle)", "融资中 (InInvestment)", "待出租 (InvestLocked)", "出租中 (Rented)"];
+        const STATUS_COLOR = ["bg-gray-100 text-gray-800", "bg-blue-100 text-blue-800", "bg-yellow-100 text-yellow-800", "bg-green-100 text-green-800"];
+
+        function App() {
+            const [provider, setProvider] = useState(null);
+            const [signer, setSigner] = useState(null);
+            const [contract, setContract] = useState(null);
+            const [account, setAccount] = useState("");
+            const [logs, setLogs] = useState([]);
+            
+            const [searchId, setSearchId] = useState("");
+            const [currentProp, setCurrentProp] = useState(null);
+            const [userShareInfo, setUserShareInfo] = useState(null);
+
+            const [listForm, setListForm] = useState({ name: "海景别墅 No.1", address: "迈阿密大道 888号", area: 120, type: "别墅", phone: "13800000000" });
+            const [investForm, setInvestForm] = useState({ price: "0.1", duration: 3 });
+            const [rentForm, setRentForm] = useState({ rent: "1", months: 4 });
+            const [buyShareAmount, setBuyShareAmount] = useState(10);
+
+            async function connectWallet() {
+                if (!window.ethereum) return alert("请安装 MetaMask!");
+                try {
+                    await window.ethereum.request({ method: 'eth_requestAccounts' });
+                    const _provider = new ethers.providers.Web3Provider(window.ethereum);
+                    const _signer = _provider.getSigner();
+                    const _addr = await _signer.getAddress();
+                    const _contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, _signer);
+                    
+                    setProvider(_provider);
+                    setSigner(_signer);
+                    setAccount(_addr);
+                    setContract(_contract);
+                    addLog("钱包已连接: " + _addr);
+                } catch (err) {
+                    console.error(err);
+                    addLog("连接失败: " + err.message);
+                }
+            }
+
+            function addLog(msg) {
+                setLogs(prev => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev]);
+            }
+
+            async function handleListProperty() {
+                if (!contract) return;
+                try {
+                    addLog("正在上链房产信息...");
+                    const tx = await contract.listProperty(listForm.name, listForm.address, listForm.area, listForm.type, listForm.phone);
+                    addLog("交易已发送，等待确认...");
+                    const receipt = await tx.wait();
+                    const event = receipt.events.find(e => e.event === "PropertyListed");
+                    if (event) {
+                        const newId = event.args.id.toString();
+                        addLog(`✅ 房产上链成功! ID: ${newId}`);
+                        setSearchId(newId);
+                        fetchProperty(newId);
+                    }
+                } catch (err) {
+                    console.error(err);
+                    addLog("❌ 上链失败: " + err.message);
+                }
+            }
+
+            async function fetchProperty(idOverride) {
+                const idToFetch = idOverride || searchId;
+                if (!contract || !idToFetch) return;
+                try {
+                    addLog(`正在查询房产 ID: ${idToFetch}...`);
+                    const p = await contract.properties(idToFetch);
+                    const u = await contract.userInfo(idToFetch, account);
+                    
+                    setCurrentProp({
+                        id: idToFetch,
+                        name: p.name,
+                        address: p.physicalAddress,
+                        landlord: p.landlord,
+                        status: p.status,
+                        sharePrice: ethers.utils.formatEther(p.sharePrice),
+                        totalSharesSold: p.totalSharesSold.toString(),
+                        monthlyRent: ethers.utils.formatEther(p.monthlyRent),
+                        rentDeposit: ethers.utils.formatEther(p.rentDeposit),
+                        tenant: p.tenant,
+                        landlordDeposit: ethers.utils.formatEther(p.landlordDeposit)
+                    });
+
+                    setUserShareInfo({
+                        shares: u.shares.toString(),
+                        withdrawn: ethers.utils.formatEther(u.withdrawnRent)
+                    });
+
+                } catch (err) {
+                    addLog("❌ 查询失败 (ID可能不存在): " + err.message);
+                    setCurrentProp(null);
+                }
+            }
+
+            async function handleStartInvest() {
+                try {
+                    const deposit = ethers.utils.parseEther(investForm.price).mul(30);
+                    addLog(`开启融资... 需支付押金: ${ethers.utils.formatEther(deposit)} ETH`);
+                    const tx = await contract.startInvestment(currentProp.id, ethers.utils.parseEther(investForm.price), investForm.duration, { value: deposit });
+                    await tx.wait();
+                    addLog("✅ 融资已开启");
+                    fetchProperty();
+                } catch(err) { addLog("❌ " + err.message); }
+            }
+
+            async function handleBuyShares() {
+                try {
+                    const cost = ethers.utils.parseEther(currentProp.sharePrice).mul(buyShareAmount);
+                    addLog(`购买 ${buyShareAmount} 份... 需支付: ${ethers.utils.formatEther(cost)} ETH`);
+                    const tx = await contract.buyShares(currentProp.id, buyShareAmount, { value: cost });
+                    await tx.wait();
+                    addLog("✅ 购买成功");
+                    fetchProperty();
+                } catch(err) { addLog("❌ " + err.message); }
+            }
+
+            async function handleFinishInvestAndList() {
+                try {
+                    if (currentProp.status === 1) {
+                        addLog("正在锁定融资...");
+                        const tx1 = await contract.finishInvestment(currentProp.id);
+                        await tx1.wait();
+                    }
+                    addLog("正在上架出租市场...");
+                    const tx2 = await contract.listForRent(currentProp.id, ethers.utils.parseEther(rentForm.rent));
+                    await tx2.wait();
+                    addLog("✅ 已上架出租");
+                    fetchProperty();
+                } catch(err) { addLog("❌ " + err.message); }
+            }
+
+            async function handleRent() {
+                try {
+                    const rent = ethers.utils.parseEther(currentProp.monthlyRent).mul(rentForm.months);
+                    const deposit = ethers.utils.parseEther(currentProp.rentDeposit);
+                    const total = rent.add(deposit);
+                    
+                    addLog(`正在租房... 总需支付: ${ethers.utils.formatEther(total)} ETH`);
+                    const tx = await contract.rentProperty(currentProp.id, rentForm.months, { value: total });
+                    await tx.wait();
+                    addLog("✅ 租房成功!");
+                    fetchProperty();
+                } catch(err) { addLog("❌ " + err.message); }
+            }
+
+            async function handleClaim() {
+                try {
+                    addLog("正在提取收益...");
+                    const tx = await contract.claimRentIncome(currentProp.id);
+                    await tx.wait();
+                    addLog("✅ 收益提取成功");
+                    fetchProperty();
+                } catch(err) { addLog("❌ " + err.message); }
+            }
+
+            async function handleWithdrawDeposit() {
+                try {
+                    addLog("正在结算退押金...");
+                    const tx = await contract.withdrawDeposits(currentProp.id);
+                    await tx.wait();
+                    addLog("✅ 结算成功，状态已重置");
+                    fetchProperty();
+                } catch(err) { addLog("❌ " + err.message); }
+            }
+
+            return (
+                <div className="min-h-screen p-8 text-gray-800">
+                    <div className="max-w-6xl mx-auto">
+                        
+                        <div className="flex justify-between items-center mb-8">
+                            <div>
+                                <h1 className="text-3xl font-bold text-indigo-900">RWA 租金收益协议</h1>
+                                <p className="text-gray-500">基于 Foundry 本地测试网 (Anvil)</p>
+                            </div>
+                            <button 
+                                onClick={connectWallet}
+                                className={`px-6 py-2 rounded-full font-medium transition ${account ? 'bg-green-100 text-green-700' : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-lg'}`}
+                            >
+                                {account ? `${account.slice(0,6)}...${account.slice(-4)}` : "连接钱包"}
+                            </button>
+                        </div>
+
+                        {CONTRACT_ADDRESS === "YOUR_CONTRACT_ADDRESS_HERE" && (
+                            <div className="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mb-6">
+                                <p className="font-bold">⚠️ 请先编辑 HTML 文件，填入你的合约地址！</p>
+                            </div>
+                        )}
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                            
+                            <div className="space-y-6">
+                                <div className="glass-panel p-6 rounded-2xl shadow-sm">
+                                    <h2 className="text-xl font-bold mb-4 text-gray-700 border-b pb-2">🏠 房东: 上链房产</h2>
+                                    <div className="space-y-3">
+                                        <input className="w-full p-2 border rounded" placeholder="房产名称" value={listForm.name} onChange={e => setListForm({...listForm, name: e.target.value})} />
+                                        <input className="w-full p-2 border rounded" placeholder="物理地址" value={listForm.address} onChange={e => setListForm({...listForm, address: e.target.value})} />
+                                        <div className="flex gap-2">
+                                            <input className="w-1/2 p-2 border rounded" type="number" placeholder="面积" value={listForm.area} onChange={e => setListForm({...listForm, area: e.target.value})} />
+                                            <input className="w-1/2 p-2 border rounded" placeholder="类型" value={listForm.type} onChange={e => setListForm({...listForm, type: e.target.value})} />
+                                        </div>
+                                        <input className="w-full p-2 border rounded" placeholder="房东电话" value={listForm.phone} onChange={e => setListForm({...listForm, phone: e.target.value})} />
+                                        <button onClick={handleListProperty} className="w-full bg-indigo-600 text-white py-2 rounded hover:bg-indigo-700 transition">上链房产</button>
+                                    </div>
+                                </div>
+
+                                <div className="glass-panel p-6 rounded-2xl shadow-sm h-64 overflow-y-auto font-mono text-xs bg-gray-900 text-green-400 no-scrollbar">
+                                    <h3 className="text-white font-bold mb-2 sticky top-0 bg-gray-900 pb-1 border-b border-gray-700">📜 交易日志</h3>
+                                    {logs.length === 0 && <p className="text-gray-600">暂无活动...</p>}
+                                    {logs.map((log, i) => <div key={i} className="mb-1">{log}</div>)}
+                                </div>
+                            </div>
+
+                            <div className="lg:col-span-2 space-y-6">
+                                <div className="glass-panel p-4 rounded-xl shadow-sm flex gap-2">
+                                    <input 
+                                        className="flex-1 p-2 border rounded text-lg" 
+                                        placeholder="输入房产 ID (查看日志获取)" 
+                                        value={searchId}
+                                        onChange={e => setSearchId(e.target.value)}
+                                    />
+                                    <button onClick={() => fetchProperty()} className="bg-gray-800 text-white px-6 rounded hover:bg-gray-900">查询</button>
+                                </div>
+
+                                {currentProp ? (
+                                    <div className="glass-panel p-8 rounded-2xl shadow-lg border border-indigo-100">
+                                        <div className="flex justify-between items-start mb-6">
+                                            <div>
+                                                <h2 className="text-3xl font-bold text-gray-800">{currentProp.name}</h2>
+                                                <p className="text-gray-500 flex items-center mt-1">📍 {currentProp.address} (ID: {currentProp.id})</p>
+                                            </div>
+                                            <span className={`px-4 py-1 rounded-full text-sm font-bold ${STATUS_COLOR[currentProp.status]}`}>
+                                                {STATUS_MAP[currentProp.status]}
+                                            </span>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8 text-sm">
+                                            <div className="bg-gray-50 p-3 rounded">
+                                                <p className="text-gray-500">我的份额</p>
+                                                {/* 修复：使用 && 替代 ?. */}
+                                                <p className="font-bold text-lg text-indigo-600">{(userShareInfo && userShareInfo.shares) || 0}%</p>
+                                            </div>
+                                            <div className="bg-gray-50 p-3 rounded">
+                                                <p className="text-gray-500">已提取收益</p>
+                                                {/* 修复：使用 && 替代 ?. */}
+                                                <p className="font-bold text-lg">{(userShareInfo && userShareInfo.withdrawn) || 0} ETH</p>
+                                            </div>
+                                            <div className="bg-gray-50 p-3 rounded">
+                                                <p className="text-gray-500">月租金</p>
+                                                <p className="font-bold text-lg">{currentProp.monthlyRent > 0 ? currentProp.monthlyRent + " ETH" : "-"}</p>
+                                            </div>
+                                            <div className="bg-gray-50 p-3 rounded">
+                                                <p className="text-gray-500">已售份额</p>
+                                                <p className="font-bold text-lg">{currentProp.totalSharesSold}%</p>
+                                            </div>
+                                        </div>
+
+                                        <div className="border-t pt-6">
+                                            <h3 className="font-bold text-gray-700 mb-4">可用操作</h3>
+                                            
+                                            {currentProp.status === 0 && (
+                                                <div className="flex gap-4 items-end bg-blue-50 p-4 rounded-xl">
+                                                    <div className="flex-1">
+                                                        <label className="text-xs text-gray-500">单份价格 (ETH)</label>
+                                                        <input className="w-full p-2 border rounded" type="number" value={investForm.price} onChange={e => setInvestForm({...investForm, price: e.target.value})} />
+                                                    </div>
+                                                    <div className="flex-1">
+                                                        <label className="text-xs text-gray-500">权益时长 (月)</label>
+                                                        <input className="w-full p-2 border rounded" type="number" value={investForm.duration} onChange={e => setInvestForm({...investForm, duration: e.target.value})} />
+                                                    </div>
+                                                    <button onClick={handleStartInvest} className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700">开启融资</button>
+                                                </div>
+                                            )}
+
+                                            {currentProp.status === 1 && (
+                                                <div className="space-y-4">
+                                                    <div className="flex gap-4 items-center bg-blue-50 p-4 rounded-xl border border-blue-100">
+                                                        <div className="flex-1">
+                                                            <p className="text-sm text-blue-800 font-bold">💰 正在融资 (价格: {currentProp.sharePrice} ETH/份)</p>
+                                                            <p className="text-xs text-gray-500">需支付给房东，剩余份额: {100 - currentProp.totalSharesSold}</p>
+                                                        </div>
+                                                        <input className="w-20 p-2 border rounded" type="number" value={buyShareAmount} onChange={e => setBuyShareAmount(e.target.value)} />
+                                                        <button onClick={handleBuyShares} className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">购买份额</button>
+                                                    </div>
+
+                                                    <div className="bg-yellow-50 p-4 rounded-xl flex justify-between items-center">
+                                                        <div className="text-sm">
+                                                            <p className="font-bold text-yellow-800">房东操作区</p>
+                                                            <p className="text-yellow-600">设置月租并进入招租市场 (同时结束融资)</p>
+                                                        </div>
+                                                        <div className="flex gap-2 items-center">
+                                                            <input className="w-24 p-2 border rounded" placeholder="月租ETH" value={rentForm.rent} onChange={e => setRentForm({...rentForm, rent: e.target.value})} />
+                                                            <button onClick={handleFinishInvestAndList} className="bg-yellow-600 text-white px-4 py-2 rounded hover:bg-yellow-700">结束融资并上架出租</button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {currentProp.status === 2 && (
+                                                <div className="bg-green-50 p-4 rounded-xl flex justify-between items-center border border-green-200">
+                                                    <div>
+                                                        <p className="font-bold text-green-800">🙋‍♂️ 招租中</p>
+                                                        <p className="text-sm text-green-600">月租: {currentProp.monthlyRent} ETH | 押金: {currentProp.rentDeposit} ETH</p>
+                                                    </div>
+                                                    <div className="flex gap-2 items-center">
+                                                        <span className="text-sm">租</span>
+                                                        <input className="w-16 p-2 border rounded" type="number" value={rentForm.months} onChange={e => setRentForm({...rentForm, months: e.target.value})} />
+                                                        <span className="text-sm">个月</span>
+                                                        <button onClick={handleRent} className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">确认租下</button>
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            {currentProp.status === 3 && (
+                                                <div className="space-y-4">
+                                                    <div className="bg-purple-50 p-4 rounded-xl flex justify-between items-center border border-purple-200">
+                                                        <div>
+                                                            <p className="font-bold text-purple-800">💸 收益提取 (线性释放)</p>
+                                                            <p className="text-xs text-purple-600">任何人均可调用，资金按份额分配</p>
+                                                        </div>
+                                                        <button onClick={handleClaim} className="bg-purple-600 text-white px-6 py-2 rounded hover:bg-purple-700 shadow">提取我的收益</button>
+                                                    </div>
+
+                                                    <div className="bg-gray-100 p-4 rounded-xl flex justify-between items-center">
+                                                        <div>
+                                                            <p className="font-bold text-gray-700">🛑 租约结束</p>
+                                                            <p className="text-xs text-gray-500">仅当租期结束后可操作，退还双方押金</p>
+                                                        </div>
+                                                        <button onClick={handleWithdrawDeposit} className="bg-gray-600 text-white px-6 py-2 rounded hover:bg-gray-700">结算并退押金</button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="h-64 flex flex-col items-center justify-center text-gray-400 bg-white rounded-2xl border-2 border-dashed border-gray-200">
+                                        <p className="text-lg">👈 请先上架房产，或输入 ID 查询</p>
+                                        <p className="text-sm mt-2">查看左侧日志获取新上架的 ID</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
