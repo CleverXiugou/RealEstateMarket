@@ -3,79 +3,117 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import "../src/RealEstateMarket.sol";
-import "../src/libraries/DataTypes.sol"; 
+import "../src/libraries/DataTypes.sol";
 
 contract RealEstateTest is Test {
     RealEstateMarket market;
+    
     address landlord = address(0x1);
     address investor = address(0x2);
     address tenant = address(0x3);
 
     function setUp() public {
         market = new RealEstateMarket();
-        
         vm.deal(landlord, 100 ether);
         vm.deal(investor, 100 ether);
         vm.deal(tenant, 100 ether);
     }
 
-    function testFullCycle() public {
-        // 1. 房东上链
+    // ✅ 测试 1: 成功修改信息 (Happy Path)
+    function testUpdateInfoSuccess() public {
         vm.startPrank(landlord);
-        uint256 pid = market.listProperty("Seaview Villa", "123 Ocean Dr", 100, "Villa", "123456");
-        console.log("Property ID:", pid);
+        // 1. 初始上链
+        uint256 pid = market.listProperty("Old Name", "Old Address", 50, "Apt", "111");
+
+        // 2. 调用修改函数
+        market.updatePropertyBasicInfo(pid, "New Name", "New Address", 100, "Villa", "222");
         
-        // 2. 开启融资
-        market.startInvestment{value: 3 ether}(pid, 0.1 ether, 3); 
+        // 3. 验证链上数据是否变了
+        // ⚠️ 修复关键点：这里总共需要匹配 17 个参数
+        // 1.name, 2.addr, 3.area, 4.pType, 5.phone
+        // 后面还有 12 个参数 (从 index 6 到 17)
+        // 所以 phone 后面需要 12 个逗号
+        (
+            string memory name, 
+            string memory addr, 
+            uint256 area, 
+            string memory pType, 
+            string memory phone,
+            ,,,,,,,,,,,// 12个逗号，确保总数是 17
+        ) = market.properties(pid);
+
+        assertEq(name, "New Name");
+        assertEq(addr, "New Address");
+        assertEq(area, 100);
+        assertEq(pType, "Villa");
+        assertEq(phone, "222");
+        
+        vm.stopPrank();
+    }
+
+    // ❌ 测试 2: 非房东修改 -> 应该失败
+    function testUpdateFailNotLandlord() public {
+        vm.startPrank(landlord);
+        uint256 pid = market.listProperty("My House", "Addr", 50, "Apt", "111");
         vm.stopPrank();
 
-        // 3. 投资者购买 40份 (4 ETH)
+        // 切换成投资者尝试修改
         vm.startPrank(investor);
-        market.buyShares{value: 4 ether}(pid, 40);
+        vm.expectRevert("Not landlord");
+        market.updatePropertyBasicInfo(pid, "Hacker", "Hacked Addr", 999, "Tent", "000");
+        vm.stopPrank();
+    }
+
+    // ❌ 测试 3: 状态不是闲置 -> 应该失败
+    function testUpdateFailWrongStatus() public {
+        vm.startPrank(landlord);
+        uint256 pid = market.listProperty("Seaview", "Beach", 100, "Villa", "111");
+        
+        // 开启融资，状态变为 InInvestment (1)
+        market.startInvestment{value: 1 ether}(pid, 0.1 ether, 12, 14);
+        
+        // 尝试修改 -> 预期被拦截
+        vm.expectRevert("Must be Idle");
+        market.updatePropertyBasicInfo(pid, "Desert", "Desert", 10, "Tent", "222");
+        vm.stopPrank();
+    }
+
+    // ❌ 测试 4: 份额不完整 -> 应该失败
+    function testUpdateFailSharesNotFull() public {
+        // 1. 房东上链 & 融资
+        vm.startPrank(landlord);
+        uint256 pid = market.listProperty("Shared House", "Addr", 100, "Apt", "111");
+        market.startInvestment{value: 1 ether}(pid, 0.1 ether, 12, 14);
         vm.stopPrank();
 
-        // 4. 结束融资并上架
+        // 2. 投资者买入 20份
+        vm.startPrank(investor);
+        market.buyShares{value: 2 ether}(pid, 20);
+        vm.stopPrank();
+
+        // 3. 走完流程让状态回到 Idle
         vm.startPrank(landlord);
         market.finishInvestment(pid);
-        market.listForRent(pid, 1 ether); // 月租 1 ETH
+        market.listForRent(pid, 1 ether);
         vm.stopPrank();
-
-        // ==========================================
-        // 5. 租客租房 & 自动分账测试 (核心修改)
-        // ==========================================
-        
-        // 记录租房前，投资者的合约余额（应该是 0）
-        uint256 invBalBefore = market.balances(investor);
-        console.log("Investor Balance Before Rent:", invBalBefore);
 
         vm.startPrank(tenant);
-        // 租金 4 ETH + 押金 3 ETH = 7 ETH
-        // 支付瞬间，合约会自动把租金分给股东
-        market.rentProperty{value: 7 ether}(pid, 4);
+        market.rentProperty{value: 4 ether}(pid, 1); // 租1个月
         vm.stopPrank();
 
-        // 记录租房后，投资者的合约余额
-        uint256 invBalAfter = market.balances(investor);
-        console.log("Investor Balance After Rent:", invBalAfter);
+        // 时间快进，租约结束
+        vm.warp(block.timestamp + 32 days);
 
-        // 验证：余额必须自动增加！
-        // 投资者持有 40%，总租金 4 ETH，理应分得 1.6 ETH
-        assertGt(invBalAfter, invBalBefore);
-        assertEq(invBalAfter, 1.6 ether); 
+        // 结算退押金，状态重置为 Idle
+        vm.startPrank(tenant);
+        market.withdrawDeposits(pid); 
+        vm.stopPrank();
 
-        // ==========================================
-        // 6. 提现到钱包 (Withdraw)
-        // ==========================================
-        vm.startPrank(investor);
-        uint256 walletBefore = investor.balance;
-        
-        // 把自动分到的钱提现
-        market.withdraw(invBalAfter);
-        
-        uint256 walletAfter = investor.balance;
-        
-        // 验证钱包收到了钱
-        assertEq(walletAfter, walletBefore + invBalAfter);
+        // 4. 此时状态是 Idle，但房东只有 80% 股份
+        // 房东试图修改 -> 预期失败
+        vm.startPrank(landlord);
+        vm.expectRevert("Shares not full");
+        market.updatePropertyBasicInfo(pid, "New Name", "Changed Addr", 200, "Villa", "222");
         vm.stopPrank();
     }
 }

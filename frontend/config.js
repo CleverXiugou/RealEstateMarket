@@ -3,7 +3,8 @@ const CONTRACT_ADDRESS = "0x5FbDB2315678afecb367f032d93F642f64180aa3"; // ⚠️
 const CONTRACT_ABI = [
     "function getAllPropertyIds() view returns (uint256[])",
     "function listProperty(string _name, string _physicalAddress, uint256 _area, string _propertyType, string _phone) external returns (uint256)",
-    "function startInvestment(uint256 _propertyId, uint256 _sharePrice, uint256 _durationMonths) external payable",
+    "function startInvestment(uint256 _propertyId, uint256 _sharePrice, uint256 _rightsDurationMonths, uint256 _fundraisingDays) external payable",
+    "function updatePropertyBasicInfo(uint256 _propertyId, string _name, string _physicalAddress, uint256 _area, string _propertyType, string _phone) external",
     "function finishInvestment(uint256 _propertyId) external",
     "function buyShares(uint256 _propertyId, uint256 _shareAmount) external payable",
     "function listForRent(uint256 _propertyId, uint256 _monthlyRent) external",
@@ -12,7 +13,7 @@ const CONTRACT_ABI = [
     "function balances(address) view returns (uint256)",
     "function withdraw(uint256) external",
     "function burnProperty(uint256 _propertyId) external",
-    "function properties(uint256) view returns (string name, string physicalAddress, uint256 area, string propertyType, string landlordPhone, address landlord, uint8 status, uint256 sharePrice, uint256 investmentEndTime, uint256 landlordDeposit, uint256 totalSharesSold, uint256 monthlyRent, uint256 rentDeposit, uint256 rentStartTime, uint256 rentEndTime, address tenant)",
+    "function properties(uint256) view returns (string name, string physicalAddress, uint256 area, string propertyType, string landlordPhone, address landlord, uint8 status, uint256 sharePrice, uint256 investmentEndTime, uint256 landlordDeposit, uint256 totalSharesSold, uint256 monthlyRent, uint256 rentDeposit, uint256 rentStartTime, uint256 rentEndTime, address tenant, uint256 rightsDuration)",
     "function userInfo(uint256, address) view returns (uint256 shares, uint256 withdrawnRent)",
 ];
 

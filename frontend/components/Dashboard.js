@@ -35,7 +35,7 @@ const PROPERTY_TYPES = [
 ];
 
 // ⚠️ 注意：这里增加了 onBurn 参数
-const Dashboard = ({ account, properties, myDeposit, myWithdrawable, onList, onStartInvest, onLock, onListRent, onClaim, onWithdrawDeposit, onWithdraw, onBurn, loadingMap }) => {
+const Dashboard = ({ account, properties, myDeposit, myWithdrawable, onList, onStartInvest, onUpdateInfo, onLock, onListRent, onWithdrawDeposit, onWithdraw, onBurn, loadingMap }) => {
     const [listForm, setListForm] = React.useState({ name: "", address: "", area: "", type: "公寓", phone: "" });
     const [forms, setForms] = React.useState({});
     const [assetTab, setAssetTab] = React.useState('landlord');
@@ -72,47 +72,111 @@ const Dashboard = ({ account, properties, myDeposit, myWithdrawable, onList, onS
         if (amount) onWithdraw(amount);
     };
 
+    // ✅ [修改] 开启融资确认：包含 RightsDuration 和 FundraisingDays
     const handleStartInvestConfirm = async (id) => {
         const f = forms[id] || {};
-        if (!f.price || !f.duration) return Swal.fire('提示', '请先填写房产月估值和融资时长', 'info');
+        // 校验输入
+        if (!f.price) return Swal.fire('提示', '请填写房产月估值', 'info');
+        
+        // 弹出复杂表单询问两个时间参数
+        const { value: formValues } = await Swal.fire({
+            title: '📡 开启融资配置',
+            html: `
+                <div class="text-left space-y-4">
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-1">1. 投资者权益周期 (月)</label>
+                        <p class="text-xs text-gray-400 mb-1">投资者购买的是未来几个月的收益权？(1-12个月)</p>
+                        <input id="swal-rights" type="number" class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="例如: 12" min="1" max="12">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-1">2. 融资窗口期 (天)</label>
+                        <p class="text-xs text-gray-400 mb-1">允许投资者购买的时间窗口 (7-14天)</p>
+                        <input id="swal-days" type="number" class="w-full border rounded px-3 py-2 focus:ring-2 focus:ring-indigo-500 outline-none" placeholder="例如: 7" min="7" max="14">
+                    </div>
+                </div>
+            `,
+            focusConfirm: false,
+            showCancelButton: true,
+            confirmButtonText: '下一步: 计算押金',
+            preConfirm: () => {
+                const rights = document.getElementById('swal-rights').value;
+                const days = document.getElementById('swal-days').value;
+                if (!rights || rights < 1 || rights > 12) Swal.showValidationMessage('权益周期必须是 1-12 个月');
+                if (!days || days < 7 || days > 14) Swal.showValidationMessage('融资窗口必须是 7-14 天');
+                return [rights, days];
+            }
+        });
+
+        if (!formValues) return;
+        const [rightsDuration, fundraisingDays] = formValues;
+
+        // 计算逻辑
         const monthlyVal = parseFloat(f.price);
-        const duration = parseInt(f.duration);
-        const totalValue = monthlyVal * duration;
+        // 这里为了演示，押金仍按权益周期总价值的 30% 计算 (您可以根据需要调整)
+        const totalValue = monthlyVal * rightsDuration;
         const deposit = totalValue * 0.30;
         const sharePrice = totalValue / 100;
+
         const result = await Swal.fire({
-            title: '开启融资确认',
+            title: '💰 支付确认',
             html: `
                 <div class="text-left text-sm space-y-3 p-2">
-                    <div class="flex justify-between border-b pb-1"><span class="text-gray-500">房产月估值:</span><span class="font-bold text-gray-800">${monthlyVal} ETH</span></div>
-                    <div class="flex justify-between border-b pb-1"><span class="text-gray-500">融资周期:</span><span class="font-bold">${duration} 个月</span></div>
-                    <div class="flex justify-between border-b pb-1 bg-gray-50 p-1 rounded"><span class="text-gray-600">房产周期总价值:</span><span class="font-bold text-gray-900">${totalValue.toFixed(4)} ETH</span></div>
-                    <div class="flex justify-between border-b pb-1 text-xs text-gray-500 mt-2"><span>每份单价 (1%):</span><span class="font-mono font-bold text-indigo-500">${sharePrice.toFixed(4)} ETH</span></div>
+                    <div class="flex justify-between border-b pb-1"><span class="text-gray-500">月估值:</span><span class="font-bold text-gray-800">${monthlyVal} ETH</span></div>
+                    <div class="flex justify-between border-b pb-1"><span class="text-gray-500">权益周期:</span><span class="font-bold">${rightsDuration} 个月</span></div>
+                    <div class="flex justify-between border-b pb-1"><span class="text-gray-500">融资窗口:</span><span class="font-bold text-orange-600">${fundraisingDays} 天</span></div>
+                    
+                    <div class="flex justify-between border-b pb-1 bg-gray-50 p-1 rounded"><span class="text-gray-600">总估值:</span><span class="font-bold text-gray-900">${totalValue.toFixed(4)} ETH</span></div>
+                    <div class="flex justify-between border-b pb-1 text-xs text-gray-500 mt-2"><span>单份价格 (1%):</span><span class="font-mono font-bold text-indigo-500">${sharePrice.toFixed(4)} ETH</span></div>
+                    
                     <div class="flex justify-between items-center pt-2 mt-2 border-t border-dashed"><span class="text-gray-600 font-medium">需缴纳押金 (30%):</span><span class="text-xl font-bold text-indigo-600">${deposit.toFixed(4)} ETH</span></div>
                 </div>
             `,
             icon: 'info', showCancelButton: true, confirmButtonText: '确认并支付', confirmButtonColor: '#4f46e5'
         });
-        if (result.isConfirmed) onStartInvest(id, sharePrice.toString(), duration, deposit.toString());
+        
+        if (result.isConfirmed) {
+            // 调用 App.js 的 onStartInvest
+            onStartInvest(id, sharePrice.toString(), rightsDuration, fundraisingDays, deposit.toString());
+        }
     };
 
-    // ✅ [新增] 销毁房产确认
+    // ✅ [新增] 修改房产信息 UI
+    const handleUpdateInfoClick = async (p) => {
+        const { value: formValues } = await Swal.fire({
+            title: `📝 修改房产信息 #${p.id}`,
+            html: `
+                <input id="swal-name" class="swal2-input" placeholder="名称" value="${p.name}">
+                <input id="swal-addr" class="swal2-input" placeholder="地址" value="${p.physicalAddress}">
+                <input id="swal-area" class="swal2-input" placeholder="面积" type="number" value="${p.area}">
+                <input id="swal-type" class="swal2-input" placeholder="类型" value="${p.propertyType}">
+                <input id="swal-phone" class="swal2-input" placeholder="电话" value="${p.landlordPhone}">
+            `,
+            focusConfirm: false,
+            showCancelButton: true,
+            confirmButtonText: '保存修改',
+            preConfirm: () => {
+                return {
+                    name: document.getElementById('swal-name').value,
+                    address: document.getElementById('swal-addr').value,
+                    area: document.getElementById('swal-area').value,
+                    type: document.getElementById('swal-type').value,
+                    phone: document.getElementById('swal-phone').value
+                }
+            }
+        });
+
+        if (formValues) {
+            onUpdateInfo(p.id, formValues);
+        }
+    };
+
     const handleBurnClick = async (id, name) => {
         const result = await Swal.fire({
             title: '⚠️ 确定要销毁吗？',
             html: `您正在试图销毁房产 <b>${name}</b>。<br/><br/>此操作将永久删除链上数据，且<b>不可恢复</b>！`,
-            icon: 'error', // 使用红色图标示警
-            showCancelButton: true,
-            confirmButtonText: '🗑️ 确认销毁',
-            confirmButtonColor: '#dc2626', // 红色按钮
-            cancelButtonText: '取消',
-            reverseButtons: true,
-            background: '#fff0f0' // 淡淡的红色背景警告
+            icon: 'error', showCancelButton: true, confirmButtonText: '🗑️ 确认销毁', confirmButtonColor: '#dc2626', cancelButtonText: '取消', reverseButtons: true, background: '#fff0f0'
         });
-
-        if (result.isConfirmed) {
-            onBurn(id);
-        }
+        if (result.isConfirmed) onBurn(id);
     };
 
     const getStatusStyle = (status) => {
@@ -134,10 +198,11 @@ const Dashboard = ({ account, properties, myDeposit, myWithdrawable, onList, onS
                 <div className="bg-indigo-50/50 rounded-xl p-3 mb-4 border border-indigo-100">
                     <div className="flex justify-between items-end mb-1"><span className="text-[10px] font-bold text-indigo-600 uppercase">融资进度</span><span className="text-xs font-bold text-indigo-700">{sold}%</span></div>
                     <div className="w-full bg-indigo-200 rounded-full h-1.5 mb-3 overflow-hidden"><div className="bg-indigo-600 h-1.5 rounded-full" style={{width: `${sold}%`}}></div></div>
+                    {/* 显示融资截止时间 */}
+                    <div className="text-[10px] text-gray-400 text-center mb-2">截止: {new Date(p.investmentEndTime * 1000).toLocaleString()}</div>
                     <div className="grid grid-cols-2 gap-2 text-center">
                         <div className="bg-white rounded p-1.5 shadow-sm"><div className="text-[10px] text-gray-400">当前单价</div><div className="text-xs font-bold text-gray-800">{price} <span className="text-[9px] font-normal">ETH</span></div></div>
                         <div className="bg-white rounded p-1.5 shadow-sm"><div className="text-[10px] text-gray-400">我仍持有</div><div className="text-xs font-bold text-indigo-600">{myHoldings} <span className="text-[9px] font-normal">份</span></div></div>
-                        <div className="col-span-2 bg-indigo-100/50 rounded p-1.5 flex justify-between items-center px-3"><span className="text-[10px] text-indigo-800">持有市值估算</span><span className="text-xs font-bold text-indigo-700">{myValue.toFixed(4)} ETH</span></div>
                     </div>
                 </div>
             );
@@ -168,6 +233,7 @@ const Dashboard = ({ account, properties, myDeposit, myWithdrawable, onList, onS
 
     return (
         <div className="space-y-6 animate-fade-in pb-10">
+            {/* 上半部分：发布与概览 */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
                 <div className="lg:col-span-8 bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
                     <div className="bg-white px-6 py-4 border-b border-gray-100 flex justify-between items-center"><h3 className="font-bold text-gray-800 flex items-center gap-2">✨ 发布新房产 <span className="text-xs font-normal text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full">Mint NFT</span></h3></div>
@@ -199,13 +265,6 @@ const Dashboard = ({ account, properties, myDeposit, myWithdrawable, onList, onS
                         <button onClick={() => setAssetTab('investor')} className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${assetTab === 'investor' ? 'bg-white text-pink-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>🚀 投资者 ({myInvestments.length})</button>
                         <button onClick={() => setAssetTab('tenant')} className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${assetTab === 'tenant' ? 'bg-white text-teal-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>🔑 租客 ({myRentals.length})</button>
                     </div>
-                    <div className="hidden md:flex gap-4 text-[10px] text-gray-400">
-                        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-slate-300"></span>闲置</span>
-                        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-indigo-500"></span>融资</span>
-                        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-purple-500"></span>准备</span>
-                        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-orange-400"></span>待租</span>
-                        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-teal-500"></span>出租</span>
-                    </div>
                 </div>
 
                 <div className="flex-1 overflow-y-auto custom-scrollbar p-6 bg-slate-50/50">
@@ -230,16 +289,15 @@ const Dashboard = ({ account, properties, myDeposit, myWithdrawable, onList, onS
                                             {renderDynamicInfo(p)}
 
                                             <div className="mt-auto space-y-2">
-                                                {/* 状态 0: 闲置 -> 开启融资 + 销毁按钮 */}
+                                                {/* 状态 0: 闲置 -> 开启融资 + 销毁按钮 + 修改信息按钮 */}
                                                 {p.status === 0 && <div className="flex flex-col gap-2 bg-white rounded-lg">
+                                                    <div className="flex-1"><MiniInput placeholder="月估值 (ETH)" value={(forms[p.id] && forms[p.id].price) || ''} onChange={e=>handleForm(p.id,'price',e.target.value)} /></div>
                                                     <div className="flex gap-2">
-                                                        <div className="flex-1"><MiniInput placeholder="月估值(ETH)" value={(forms[p.id] && forms[p.id].price) || ''} onChange={e=>handleForm(p.id,'price',e.target.value)} /></div>
-                                                        <div className="flex-1"><MiniInput placeholder="月数" value={(forms[p.id] && forms[p.id].duration) || ''} onChange={e=>handleForm(p.id,'duration',e.target.value)} /></div>
-                                                    </div>
-                                                    <div className="flex gap-2">
-                                                        {/* 销毁按钮 */}
+                                                        {/* 修改信息 */}
+                                                        <Button onClick={() => handleUpdateInfoClick(p)} className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-500 border border-blue-200 rounded-lg text-xs" title="修改信息">✏️</Button>
+                                                        {/* 销毁 */}
                                                         <Button onClick={() => handleBurnClick(p.id, p.name)} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 border border-red-200 rounded-lg text-xs" title="销毁房产">🗑️</Button>
-                                                        {/* 开启融资按钮 */}
+                                                        {/* 开启融资 */}
                                                         <Button className="flex-1 py-2 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm" loading={loadingMap[p.id]} onClick={()=>handleStartInvestConfirm(p.id)}>📡 开启融资</Button>
                                                     </div>
                                                 </div>}
@@ -261,7 +319,7 @@ const Dashboard = ({ account, properties, myDeposit, myWithdrawable, onList, onS
                             })}
                         </div>
                     )}
-
+                    {/* ... (Investor/Tenant views 保持不变) ... */}
                     {(assetTab === 'investor' || assetTab === 'tenant') && (
                          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
                             {(assetTab === 'investor' ? myInvestments : myRentals).map(p => (

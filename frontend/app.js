@@ -108,11 +108,17 @@ function App() {
             if(!f.name || !f.address || !f.area || !f.type || !f.phone) return showToast("请完整填写所有房产信息", "error");
             return wrapAction('list', contract.listProperty, f.name, f.address, f.area, f.type, f.phone);
         },
-        onStartInvest: (id, sharePriceStr, duration, depositStr) => {
+        onStartInvest: (id, sharePriceStr, rightsDuration, fundraisingDays, depositStr) => {
             if(!sharePriceStr || !depositStr) return showToast("参数错误", "error");
             const priceWei = ethers.utils.parseEther(sharePriceStr);
             const depositWei = ethers.utils.parseEther(depositStr);
-            wrapAction(id, contract.startInvestment, id, priceWei, duration, { value: depositWei });
+            // 调用合约新接口
+            wrapAction(id, contract.startInvestment, id, priceWei, rightsDuration, fundraisingDays, { value: depositWei });
+        },
+        // ✅ [新增] 修改房产信息
+        onUpdateInfo: (id, f) => {
+             if(!f.name || !f.address || !f.area || !f.type || !f.phone) return showToast("信息不全", "error");
+             wrapAction(id, contract.updatePropertyBasicInfo, id, f.name, f.address, f.area, f.type, f.phone);
         },
         onLock: (id) => wrapAction(id, contract.finishInvestment, id),
         onBuy: (id, p, amt) => {

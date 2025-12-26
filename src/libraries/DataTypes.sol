@@ -48,7 +48,9 @@ library DataTypes {
         // 租客账户地址
         address tenant;
 
-        // ✅ [新增] 股东名单 (用于租金自动分账)
+        // 股东名单 (用于租金自动分账)
         address[] shareholders;
+        // 投资者权益周期
+        uint256 rightsDuration;
     }
 }

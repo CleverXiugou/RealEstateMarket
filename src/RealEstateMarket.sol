@@ -51,17 +51,55 @@ contract RealEstateMarket {
         return newId;
     }
 
+    // 修改房产信息
+    function updatePropertyBasicInfo(
+        uint256 _propertyId, 
+        string memory _name, 
+        string memory _physicalAddress, 
+        uint256 _area, 
+        string memory _propertyType, 
+        string memory _phone
+    ) external {
+        DataTypes.Property storage p = properties[_propertyId];
+        
+        // 1. 权限检查：必须是房东
+        require(msg.sender == p.landlord, "Not landlord");
+        
+        // 2. 状态检查：必须是闲置状态 (Idle)
+        // 防止在融资中或出租中修改关键信息（如地址、面积），保障投资者权益
+        require(p.status == DataTypes.PropertyStatus.Idle, "Must be Idle");
+        
+        // 3. 份额检查：必须是房东全资持有 (100份)
+        // 确保没有其他股东参与，避免资产标的变更纠纷
+        require(userInfo[_propertyId][msg.sender].shares == 100, "Shares not full");
+
+        // 4. 执行更新
+        p.name = _name;
+        p.physicalAddress = _physicalAddress;
+        p.area = _area;
+        p.propertyType = _propertyType;
+        p.landlordPhone = _phone;
+        
+        // 这里不需要发 PropertyListed 事件，因为 ID 没变，只是更新了元数据
+    }
+
     // 开启融资
-    function startInvestment(uint256 _propertyId, uint256 _sharePrice, uint256 _durationMonths) external payable {
+    function startInvestment(uint256 _propertyId, uint256 _sharePrice, uint256 _rightsDurationMonths, uint256 _fundraisingDays) external payable {
         
         DataTypes.Property storage p = properties[_propertyId];
         // 权限检查
         require(msg.sender == p.landlord, "Not landlord");
         // 押金价格检查
         require(msg.value > 0, "Deposit required"); 
+        // 限制权益周期
+        require(_rightsDurationMonths >= 1 && _rightsDurationMonths <= 12, "Rights duration must be 1-12 months");
+        // 限制融资期限
+        require(_fundraisingDays >= 7 && _fundraisingDays <= 14, "Fundraising days must be 7-14 days");
         // 输入房产的股价和融资期限
         p.sharePrice = _sharePrice;
-        p.investmentEndTime = block.timestamp + (_durationMonths * 30 days);
+        p.investmentEndTime = block.timestamp + (_fundraisingDays * 1 days);
+
+        p.rightsDuration = _rightsDurationMonths;
         // 存押金
         p.landlordDeposit = msg.value;
         // 房产进入融资状态
@@ -71,8 +109,13 @@ contract RealEstateMarket {
     // 投资者买入
     function buyShares(uint256 _propertyId, uint256 _shareAmount) external payable {
         DataTypes.Property storage p = properties[_propertyId];
+        // 状态检查
+        require(p.status == DataTypes.PropertyStatus.InInvestment, "Investment not active");
+        require(block.timestamp <= p.investmentEndTime, "Fundraising expired");
         // 资金校验
         require(msg.value == p.sharePrice * _shareAmount, "Amount error");
+
+        require(p.totalSharesSold + _shareAmount <=80, "Landlord must retain at least 20% shares");
 
         // 如果是新股东，加入名单
         if (userInfo[_propertyId][msg.sender].shares == 0) {
