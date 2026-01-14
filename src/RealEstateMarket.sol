@@ -14,10 +14,10 @@ contract RealEstateMarket {
     mapping(uint256 => mapping(address => DataTypes.UserInfo)) public userInfo;
     // 合约中所有房产ID列表
     uint256[] public allPropertyIds;
-    
+
     // Events
     event PropertyListed(uint256 indexed propertyId, string name, address indexed landlord);
-    event BalanceFunded(address indexed user, uint256 amount); 
+    event BalanceFunded(address indexed user, uint256 amount);
     event Withdrawn(address indexed user, uint256 amount);
 
     // 获取所有房产ID
@@ -26,14 +26,24 @@ contract RealEstateMarket {
     }
 
     // 房东把房产上链
-    function listProperty(string memory _name, string memory _physicalAddress, uint256 _area, string memory _propertyType, string memory _phone) external returns (uint256) {
+    function listProperty(
+        string memory _name,
+        string memory _physicalAddress,
+        uint256 _area,
+        string memory _propertyType,
+        string memory _phone
+    ) external returns (uint256) {
         // 保证房产tokenID是16位的随机数字（没有检查是否存在重复）
         uint256 randomHash = uint256(keccak256(abi.encodePacked(block.timestamp, msg.sender, allPropertyIds.length)));
         uint256 newId = (randomHash % 9000000000000000) + 1000000000000000;
-        
+
         // 存储房产信息
         DataTypes.Property storage p = properties[newId];
-        p.name = _name; p.physicalAddress = _physicalAddress; p.area = _area; p.propertyType = _propertyType; p.landlordPhone = _phone;
+        p.name = _name;
+        p.physicalAddress = _physicalAddress;
+        p.area = _area;
+        p.propertyType = _propertyType;
+        p.landlordPhone = _phone;
         // 房东默认为房产上链者的地址
         p.landlord = payable(msg.sender);
         // 房产初始状态为闲置中
@@ -43,7 +53,7 @@ contract RealEstateMarket {
         userInfo[newId][msg.sender].shares = 100;
         // 记录房产ID
         allPropertyIds.push(newId);
-        
+
         // 房东也是股东，加入股东名单
         p.shareholders.push(msg.sender);
 
@@ -53,22 +63,22 @@ contract RealEstateMarket {
 
     // 修改房产信息
     function updatePropertyBasicInfo(
-        uint256 _propertyId, 
-        string memory _name, 
-        string memory _physicalAddress, 
-        uint256 _area, 
-        string memory _propertyType, 
+        uint256 _propertyId,
+        string memory _name,
+        string memory _physicalAddress,
+        uint256 _area,
+        string memory _propertyType,
         string memory _phone
     ) external {
         DataTypes.Property storage p = properties[_propertyId];
-        
+
         // 1. 权限检查：必须是房东
         require(msg.sender == p.landlord, "Not landlord");
-        
+
         // 2. 状态检查：必须是闲置状态 (Idle)
         // 防止在融资中或出租中修改关键信息（如地址、面积），保障投资者权益
         require(p.status == DataTypes.PropertyStatus.Idle, "Must be Idle");
-        
+
         // 3. 份额检查：必须是房东全资持有 (100份)
         // 确保没有其他股东参与，避免资产标的变更纠纷
         require(userInfo[_propertyId][msg.sender].shares == 100, "Shares not full");
@@ -79,18 +89,22 @@ contract RealEstateMarket {
         p.area = _area;
         p.propertyType = _propertyType;
         p.landlordPhone = _phone;
-        
+
         // 这里不需要发 PropertyListed 事件，因为 ID 没变，只是更新了元数据
     }
 
     // 开启融资
-    function startInvestment(uint256 _propertyId, uint256 _sharePrice, uint256 _rightsDurationMonths, uint256 _fundraisingDays) external payable {
-        
+    function startInvestment(
+        uint256 _propertyId,
+        uint256 _sharePrice,
+        uint256 _rightsDurationMonths,
+        uint256 _fundraisingDays
+    ) external payable {
         DataTypes.Property storage p = properties[_propertyId];
         // 权限检查
         require(msg.sender == p.landlord, "Not landlord");
         // 押金价格检查
-        require(msg.value > 0, "Deposit required"); 
+        require(msg.value > 0, "Deposit required");
         // 限制权益周期
         require(_rightsDurationMonths >= 1 && _rightsDurationMonths <= 12, "Rights duration must be 1-12 months");
         // 限制融资期限
@@ -103,7 +117,7 @@ contract RealEstateMarket {
         // 存押金
         p.landlordDeposit = msg.value;
         // 房产进入融资状态
-        p.status = DataTypes.PropertyStatus.InInvestment; 
+        p.status = DataTypes.PropertyStatus.InInvestment;
     }
 
     // 投资者买入
@@ -112,10 +126,11 @@ contract RealEstateMarket {
         // 状态检查
         require(p.status == DataTypes.PropertyStatus.InInvestment, "Investment not active");
         require(block.timestamp <= p.investmentEndTime, "Fundraising expired");
+        require(msg.sender != p.landlord, "Landlord cannot buy own shares");
         // 资金校验
         require(msg.value == p.sharePrice * _shareAmount, "Amount error");
 
-        require(p.totalSharesSold + _shareAmount <=80, "Landlord must retain at least 20% shares");
+        require(p.totalSharesSold + _shareAmount <= 80, "Landlord must retain at least 20% shares");
 
         // 如果是新股东，加入名单
         if (userInfo[_propertyId][msg.sender].shares == 0) {
@@ -135,8 +150,53 @@ contract RealEstateMarket {
 
     // 结束融资
     function finishInvestment(uint256 _propertyId) external {
-        // 更新房产状态
-        properties[_propertyId].status = DataTypes.PropertyStatus.InvestEnded; 
+        DataTypes.Property storage p = properties[_propertyId];
+        require(msg.sender == p.landlord, "Not landlord");
+        require(p.status == DataTypes.PropertyStatus.InInvestment, "Wrong status");
+
+        p.status = DataTypes.PropertyStatus.InvestEnded;
+
+        // 记录权益周期的开始时间
+        p.rightsStartTime = block.timestamp;
+    }
+
+    // 重置股份分配，清空旧股东名单
+    function resetExpiredProperty(uint256 _propertyId) external {
+        DataTypes.Property storage p = properties[_propertyId];
+        // 必须由房东操作
+        require(msg.sender == p.landlord, "Not landlord");
+
+        // 检查状态: 必须是闲置状态才能重置
+        require(p.status == DataTypes.PropertyStatus.Idle, "Must be idle");
+
+        // 检查时间: 必须超过权益周期
+        // 权益结束时间 = 开始时间 + (月份 * 30天)
+        uint256 expiryTime = p.rightsStartTime + (p.rightsDuration * 30 days);
+        require(block.timestamp >= expiryTime, "Rights not expired yet");
+
+        // --- 执行清洗 ---
+
+        // 1. 清空所有股东的股份数据
+        for (uint256 i = 0; i < p.shareholders.length; i++) {
+            address oldShareholder = p.shareholders[i];
+            userInfo[_propertyId][oldShareholder].shares = 0;
+        }
+
+        // 2. 清空股东名单数组
+        delete p.shareholders;
+
+        // 3. 重置房东股份为 100%
+        p.totalSharesSold = 0;
+        userInfo[_propertyId][p.landlord].shares = 100;
+        // 房东重新加入股东名单 (作为唯一股东)
+        p.shareholders.push(p.landlord);
+
+        // 4. 重置时间数据，准备下一轮
+        p.rightsStartTime = 0;
+        p.rightsDuration = 0;
+        p.sharePrice = 0;
+
+        // 状态依然保持 Idle，房东可以选择重新 listProperty 或者 startInvestment
     }
 
     // 上架出租
@@ -147,30 +207,38 @@ contract RealEstateMarket {
         // 输入月租金
         p.monthlyRent = _monthlyRent;
         // 更新房产状态：开始出租
-        p.status = DataTypes.PropertyStatus.OpenForRent; 
+        p.status = DataTypes.PropertyStatus.OpenForRent;
     }
 
-    // 租客租房 
+    // 租客租房
     function rentProperty(uint256 _propertyId, uint256 _months) external payable {
         DataTypes.Property storage p = properties[_propertyId];
         // 状态检查
         require(p.status == DataTypes.PropertyStatus.OpenForRent, "Not open");
-        
+
+        // ✅ [新增] 核心校验：租期不能超过权益剩余时间
+        // 权益截止时间 = 开始时间 + (周期 * 30天)
+        uint256 rightsEndTime = p.rightsStartTime + (p.rightsDuration * 30 days);
+        // 本次租赁结束时间 = 当前时间 + (租期 * 30天)
+        uint256 newRentEndTime = block.timestamp + (_months * 30 days);
+
+        require(newRentEndTime <= rightsEndTime, "Rent exceeds rights duration");
+
         // 计算总租金和押金
         uint256 totalRent = p.monthlyRent * _months;
-        uint256 deposit = p.monthlyRent * 3; 
+        uint256 deposit = p.monthlyRent * 3;
         // 检查支付金额
         require(msg.value >= totalRent + deposit, "Not enough");
 
         // 存押金
-        p.rentDeposit = deposit; 
-        
-        // 立即分租金 
+        p.rentDeposit = deposit;
+
+        // 立即分租金
         // 遍历所有股东，按比例发钱
-        for (uint i = 0; i < p.shareholders.length; i++) {
+        for (uint256 i = 0; i < p.shareholders.length; i++) {
             address shareholder = p.shareholders[i];
             uint256 share = userInfo[_propertyId][shareholder].shares;
-            
+
             if (share > 0) {
                 // 分红 = 总租金 * (持股数 / 100)
                 uint256 dividend = (totalRent * share) / 100;
@@ -178,7 +246,7 @@ contract RealEstateMarket {
                 emit BalanceFunded(shareholder, dividend);
             }
         }
-        
+
         // 设置租赁时间和租客
         p.rentStartTime = block.timestamp;
         p.rentEndTime = block.timestamp + (_months * 30 days);
@@ -187,48 +255,139 @@ contract RealEstateMarket {
     }
 
     // 退还押金
-    function withdrawDeposits(uint256 _propertyId) external {
-        DataTypes.Property storage p = properties[_propertyId];
-        // 权限检查
-        if (msg.sender == p.landlord && p.landlordDeposit > 0) {
-            uint256 amt = p.landlordDeposit;
-            p.landlordDeposit = 0; balances[p.landlord] += amt; 
-        }
-        // 租客退还押金
-        if (msg.sender == p.tenant && p.rentDeposit > 0) {
-            uint256 amt = p.rentDeposit;
-            p.rentDeposit = 0; balances[p.tenant] += amt; 
-            // 重置房产状态
-            p.status = DataTypes.PropertyStatus.Idle;
-            // 清空租客信息
-            p.tenant = address(0);
-        }
-    }
+    // function withdrawDeposits(uint256 _propertyId) external {
+    //     DataTypes.Property storage p = properties[_propertyId];
+    //     // 权限检查
+    //     if (msg.sender == p.landlord && p.landlordDeposit > 0) {
+    //         uint256 amt = p.landlordDeposit;
+    //         p.landlordDeposit = 0; balances[p.landlord] += amt;
+    //     }
+    //     // 租客退还押金
+    //     if (msg.sender == p.tenant && p.rentDeposit > 0) {
+    //         uint256 amt = p.rentDeposit;
+    //         p.rentDeposit = 0; balances[p.tenant] += amt;
+    //         // 重置房产状态
+    //         p.status = DataTypes.PropertyStatus.Idle;
+    //         // 清空租客信息
+    //         p.tenant = address(0);
+    //     }
+    // }
 
     // 销毁房产
     function burnProperty(uint256 _propertyId) external {
         DataTypes.Property storage p = properties[_propertyId];
-        
+
         // 权限检查
         require(msg.sender == p.landlord, "Not landlord");
         // 只有当房产空闲时才能销毁
         require(p.status == DataTypes.PropertyStatus.Idle, "Must be Idle");
-        
+
         // 安全检查：确保份额是完整的 (100%)，防止误删有投资者的房产
         require(userInfo[_propertyId][msg.sender].shares == 100, "Shares not full");
 
         // 删除数据 (这将把该 ID 对应的 struct 重置为默认值，landlord 变为 address(0))
         delete properties[_propertyId];
-        
+
         // 注意：allPropertyIds 数组里依然有这个 ID，但我们在前端会过滤掉无效数据
     }
-    
+
     // 自定义提取合约中的资金
     function withdraw(uint256 _amount) external {
         // 提取金额不可大于存款数
         require(balances[msg.sender] >= _amount, "Insufficient");
-        balances[msg.sender] -= _amount; 
-        (bool success, ) = msg.sender.call{value: _amount}("");
+        balances[msg.sender] -= _amount;
+        (bool success,) = msg.sender.call{value: _amount}("");
         require(success, "Transfer failed");
+    }
+
+    // 租客请求退房
+    function requestTermination(uint256 _propertyId) external {
+        DataTypes.Property storage p = properties[_propertyId];
+
+        // 必须是当前租客
+        require(msg.sender == p.tenant, "Not tenant");
+        // 必须在出租状态
+        require(p.status == DataTypes.PropertyStatus.Rented, "Not rented");
+
+        // 状态变更为：待结算
+        p.status = DataTypes.PropertyStatus.PendingSettlement;
+        // 记录申请时间，开启倒计时
+        p.tenantEndRequestTime = block.timestamp;
+    }
+
+    // 2. 房东处理退房 (同意 或 扣除押金)
+    // _returnDeposit: true=全额退给租客, false=扣除押金给房东(房屋损坏)
+    function processSettlement(uint256 _propertyId, bool _returnDeposit) external {
+        DataTypes.Property storage p = properties[_propertyId];
+        // 房东才能操作
+        require(msg.sender == p.landlord, "Not landlord");
+        // 状态必须是待结算
+        require(p.status == DataTypes.PropertyStatus.PendingSettlement, "Not pending");
+        // 执行押金处理
+        uint256 deposit = p.rentDeposit;
+        p.rentDeposit = 0; // 清零防止重入
+
+        if (_returnDeposit) {
+            // 房东同意：押金退还给租客
+            balances[p.tenant] += deposit;
+            emit BalanceFunded(p.tenant, deposit);
+        } else {
+            // 房东拒绝（房屋损坏）：押金赔付给房东
+            balances[p.landlord] += deposit;
+            emit BalanceFunded(p.landlord, deposit);
+        }
+
+        // 重置房产状态
+        _clearTenantData(p);
+    }
+
+    // 3. 租客强制退房（房东未处理）
+    function forceTermination(uint256 _propertyId) external {
+        DataTypes.Property storage p = properties[_propertyId];
+
+        // 必须是当前租客
+        require(msg.sender == p.tenant, "Not tenant");
+        // 状态必须是待结算
+        require(p.status == DataTypes.PropertyStatus.PendingSettlement, "Not pending");
+
+        // 设置最大等待时间为 3 天，超过后租客可强制退房
+        require(block.timestamp > p.tenantEndRequestTime + 3 days, "Wait for landlord");
+
+        // 执行强制退款
+        uint256 deposit = p.rentDeposit;
+        p.rentDeposit = 0;
+        balances[p.tenant] += deposit;
+        emit BalanceFunded(p.tenant, deposit);
+
+        // 重置状态
+        _clearTenantData(p);
+    }
+
+    function _clearTenantData(DataTypes.Property storage p) internal {
+        p.status = DataTypes.PropertyStatus.Idle;
+        p.tenant = address(0);
+        p.rentStartTime = 0;
+        p.rentEndTime = 0;
+        p.tenantEndRequestTime = 0;
+    }
+
+    // 获取当前最大可租月数
+    function getMaxRentableMonths(uint256 _propertyId) external view returns (uint256) {
+        DataTypes.Property storage p = properties[_propertyId];
+
+        // 如果没有融资信息，返回 0
+        if (p.rightsStartTime == 0 || p.rightsDuration == 0) return 0;
+
+        // 计算权益到期时间
+        uint256 expiryTime = p.rightsStartTime + (p.rightsDuration * 30 days);
+
+        // 如果已经过期，返回 0
+        if (block.timestamp >= expiryTime) return 0;
+
+        // 计算剩余秒数
+        uint256 remainingSeconds = expiryTime - block.timestamp;
+
+        // 转换为月数 (向下取整)
+        return remainingSeconds / 30 days;
     }
 }

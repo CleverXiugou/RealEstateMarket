@@ -138,8 +138,25 @@ function App() {
              if(!amount) return showToast("请输入金额", "error");
              wrapAction('withdraw', contract.withdraw, ethers.utils.parseEther(amount));
         },
+
+        // ✅ [新] 租客发起退房申请
+        onRequestTermination: (id) => wrapAction(id, contract.requestTermination, id),
+
+        // ✅ [新] 房东处理结算 (true=退钱, false=扣钱)
+        onProcessSettlement: (id, returnDeposit) => wrapAction(id, contract.processSettlement, id, returnDeposit),
+
+        // ✅ [新] 租客强制结算 (超时保护)
+        onForceTermination: (id) => wrapAction(id, contract.forceTermination, id),
+
         // ✅ [新增] 销毁房产 action
-        onBurn: (id) => wrapAction(id, contract.burnProperty, id)
+        onBurn: (id) => wrapAction(id, contract.burnProperty, id),
+
+        onResetExpired: (id) => wrapAction(id, contract.resetExpiredProperty, id),
+
+        onWithdraw: (amount) => {
+             if(!amount) return showToast("请输入金额", "error");
+             wrapAction('withdraw', contract.withdraw, ethers.utils.parseEther(amount));
+        }
     };
 
     return (

@@ -8,7 +8,7 @@ contract DeployRealEstate is Script {
     function run() external {
         // 【关键修改】：从环境变量读取私钥
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
-        
+
         // 使用读取到的私钥开始广播
         vm.startBroadcast(deployerPrivateKey);
 

@@ -3,13 +3,15 @@ pragma solidity ^0.8.20;
 
 library DataTypes {
     // 房产的几个状态
-    enum PropertyStatus { 
-        Idle,           // 0: 闲置中
-        InInvestment,   // 1: 融资中
-        InvestEnded,    // 2: 锁定融资
-        OpenForRent,    // 3: 正在招租
-        Rented          // 4: 已经租出
+    enum PropertyStatus {
+        Idle, // 0: 闲置中
+        InInvestment, // 1: 融资中
+        InvestEnded, // 2: 锁定融资
+        OpenForRent, // 3: 正在招租
+        Rented, // 4: 已经租出
+        PendingSettlement
     }
+
     // 投资者信息
     struct UserInfo {
         // 自己持有的股份
@@ -17,18 +19,19 @@ library DataTypes {
         // 已提取的租金
         uint256 withdrawnRent;
     }
+
     // 房产信息
     struct Property {
         string name;
         string physicalAddress;
         uint256 area;
         // 房产类型，如公寓、别墅等
-        string propertyType; 
+        string propertyType;
         string landlordPhone;
         // 房东地址，可以提现
         address payable landlord;
         PropertyStatus status;
-        
+
         // 每一股的价格，在融资时使用
         uint256 sharePrice;
         // 融资截止时间
@@ -37,7 +40,7 @@ library DataTypes {
         uint256 landlordDeposit;
         // 已售股份总数
         uint256 totalSharesSold;
-        
+
         // 每月的租金
         uint256 monthlyRent;
         // 租房押金
@@ -52,5 +55,9 @@ library DataTypes {
         address[] shareholders;
         // 投资者权益周期
         uint256 rightsDuration;
+        uint256 rightsStartTime;
+
+        // 租客提出结束租赁的时间点
+        uint256 tenantEndRequestTime;
     }
 }

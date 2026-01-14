@@ -50,8 +50,6 @@ const Explorer = ({ contract, properties, loadingMap }) => {
             else if (/^\d+$/.test(query)) {
                 const property = properties.find(p => p.id === query);
                 if (property) {
-                    // 如果本地有基础数据，再读一下最新的 Shareholders 信息(如果有合约接口)或仅仅展示当前数据
-                    // 这里我们基于现有数据做深度展示
                     setSearchResult({ type: 'property', data: property });
                     setViewMode("property");
                 } else {
@@ -68,7 +66,7 @@ const Explorer = ({ contract, properties, loadingMap }) => {
         }
     };
 
-    // 👤 获取用户深度画像 (需要遍历合约来查找该用户的投资)
+    // 👤 获取用户深度画像
     const fetchUserProfile = async (address) => {
         const userProfile = {
             address: address,
@@ -79,14 +77,11 @@ const Explorer = ({ contract, properties, loadingMap }) => {
             totalMonthlyIncome: 0 // 预计月收入
         };
 
-        // 遍历所有房产，查找与该地址有关的记录
-        // 注意：这里需要调用 contract.userInfo 来获取特定用户的份额，因为 properties prop 里只包含当前连接钱包的份额
         for (let p of properties) {
             // 1. 是房东？
             if (p.landlord.toLowerCase() === address.toLowerCase()) {
                 userProfile.landlordProps.push(p);
-                // 估值计算 (假设房东持有剩余份额)
-                const heldShares = 100 - (p.totalSharesSold ? p.totalSharesSold.toNumber() : 0);
+                const heldShares = 100 - (p.totalSharesSold && p.totalSharesSold.toNumber ? p.totalSharesSold.toNumber() : 0);
                 const price = parseFloat(ethers.utils.formatEther(p.sharePrice));
                 userProfile.totalAssetValue += heldShares * price;
             }
@@ -96,7 +91,7 @@ const Explorer = ({ contract, properties, loadingMap }) => {
                 userProfile.rentals.push(p);
             }
 
-            // 3. 是投资者？ (调用合约查询)
+            // 3. 是投资者？
             try {
                 const info = await contract.userInfo(p.id, address);
                 const shares = info.shares.toNumber();
@@ -120,10 +115,20 @@ const Explorer = ({ contract, properties, loadingMap }) => {
 
     // --- 子组件：房产详情视图 ---
     const PropertyDetailView = ({ data }) => {
+        // ✅ [修复核心]：先将 BigNumber 转换为普通数字/字符串，防止 React 渲染报错
+        const sold = data.totalSharesSold && data.totalSharesSold.toNumber ? data.totalSharesSold.toNumber() : Number(data.totalSharesSold || 0);
+        const priceEth = data.sharePrice ? parseFloat(ethers.utils.formatEther(data.sharePrice)) : 0;
+        const rentEth = data.monthlyRent ? parseFloat(ethers.utils.formatEther(data.monthlyRent)) : 0;
+        
+        // 计算年化收益 (简单的静态估算)
+        const apy = priceEth > 0 && rentEth > 0 
+            ? ((rentEth * 12 * 100) / (priceEth * 100)).toFixed(1) 
+            : '0.0';
+
         // 构造时间轴数据
         const steps = [
             { label: '上链确权', date: '区块时间', status: 'done' },
-            { label: '融资开启', date: `${data.totalSharesSold} / 100 份`, status: data.status >= 1 ? 'done' : 'wait' },
+            { label: '融资开启', date: `${sold} / 100 份`, status: data.status >= 1 ? 'done' : 'wait' },
             { label: '寻找租客', date: '待出租', status: data.status >= 3 ? 'done' : 'wait' },
             { label: '收益分红', date: data.status === 4 ? '进行中' : '-', status: data.status === 4 ? 'active' : 'wait' },
         ];
@@ -147,7 +152,7 @@ const Explorer = ({ contract, properties, loadingMap }) => {
                             </div>
                             <div className="text-right">
                                 <div className="text-sm opacity-75">当前估值</div>
-                                <div className="text-3xl font-bold">Ξ {(parseFloat(ethers.utils.formatEther(data.sharePrice)) * 100).toFixed(2)}</div>
+                                <div className="text-3xl font-bold">Ξ {(priceEth * 100).toFixed(2)}</div>
                             </div>
                         </div>
                     </div>
@@ -177,17 +182,18 @@ const Explorer = ({ contract, properties, loadingMap }) => {
                                 {/* 纯 CSS 饼图模拟 (基于 conic-gradient) */}
                                 <div className="w-full h-full rounded-full" 
                                      style={{
-                                         background: `conic-gradient(#4f46e5 0% ${100-data.totalSharesSold}%, #e2e8f0 ${100-data.totalSharesSold}% 100%)`
+                                         background: `conic-gradient(#4f46e5 0% ${sold}%, #e2e8f0 ${sold}% 100%)`
                                      }}>
                                 </div>
                                 <div className="absolute inset-0 m-8 bg-white rounded-full flex items-center justify-center flex-col shadow-inner">
-                                    <span className="text-xs text-gray-400">房东持有</span>
-                                    <span className="text-xl font-bold text-indigo-600">{100 - data.totalSharesSold}%</span>
+                                    <span className="text-xs text-gray-400">已售份额</span>
+                                    {/* ✅ [修复] 使用转换后的 sold 变量 */}
+                                    <span className="text-xl font-bold text-indigo-600">{sold}%</span>
                                 </div>
                             </div>
                             <div className="flex justify-between text-xs px-8">
-                                <div className="flex items-center gap-1"><div className="w-2 h-2 bg-indigo-600 rounded-full"></div> 房东</div>
-                                <div className="flex items-center gap-1"><div className="w-2 h-2 bg-slate-200 rounded-full"></div> 投资者 ({data.totalSharesSold}%)</div>
+                                <div className="flex items-center gap-1"><div className="w-2 h-2 bg-slate-200 rounded-full"></div> 房东 ({100 - sold}%)</div>
+                                <div className="flex items-center gap-1"><div className="w-2 h-2 bg-indigo-600 rounded-full"></div> 投资者 ({sold}%)</div>
                             </div>
                         </div>
 
@@ -197,17 +203,16 @@ const Explorer = ({ contract, properties, loadingMap }) => {
                             <div className="space-y-4">
                                 <div className="flex justify-between items-center pb-2 border-b border-gray-200">
                                     <span className="text-sm text-gray-500">份额单价</span>
-                                    <span className="font-mono font-bold text-gray-800">{ethers.utils.formatEther(data.sharePrice)} ETH</span>
+                                    <span className="font-mono font-bold text-gray-800">{priceEth} ETH</span>
                                 </div>
                                 <div className="flex justify-between items-center pb-2 border-b border-gray-200">
                                     <span className="text-sm text-gray-500">月租金收入</span>
-                                    <span className="font-mono font-bold text-teal-600">+{ethers.utils.formatEther(data.monthlyRent)} ETH</span>
+                                    <span className="font-mono font-bold text-teal-600">+{rentEth} ETH</span>
                                 </div>
                                 <div className="flex justify-between items-center pb-2 border-b border-gray-200">
                                     <span className="text-sm text-gray-500">年化收益率 (Est.)</span>
-                                    <span className="font-mono font-bold text-orange-500">
-                                        {data.monthlyRent > 0 ? ((data.monthlyRent * 12 * 100) / (data.sharePrice * 100)).toFixed(1) + '%' : '-'}
-                                    </span>
+                                    {/* ✅ [修复] 使用预计算的 apy 变量 */}
+                                    <span className="font-mono font-bold text-orange-500">{apy}%</span>
                                 </div>
                                 <div className="pt-2">
                                     <span className="text-xs text-gray-400">房东地址:</span>
